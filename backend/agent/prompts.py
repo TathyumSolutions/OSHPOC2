@@ -53,34 +53,44 @@ Your role is to help users check if a patient is eligible for insurance coverage
 Always respond in a helpful, professional tone."""
 
 
-INFORMATION_EXTRACTION_PROMPT = """Extract the following information from the user's message if present:
+INFORMATION_EXTRACTION_PROMPT = """Extract the following information from the user's message if present.
 
 User message: {user_message}
 
 Current state: {current_state}
 
-Extract any of the following fields present in the message:
-- member_id: Patient/member ID (format: alphanumeric, often starts with MB, MEM, or similar)
+## Fields to extract (return only those found, use null for missing):
+
+- member_id: Patient/member ID (alphanumeric, often starts with MB, MEM, etc.)
 - date_of_birth: Date of birth (convert to YYYY-MM-DD format)
 - policy_number: Insurance policy number
-- procedure_code: Medical procedure code (CPT code)
-- procedure_name: Name of medical procedure
-- ndc_code: National Drug Code for medications
-- medication_name: Name of medication
-- service_date: Date of service (convert to YYYY-MM-DD, use today's date if "today")
+- procedure_code: CPT code if explicitly mentioned (e.g. "99213", "70553")
+- procedure_name: Name/description of any medical procedure, test, scan, surgery, or visit
+  (e.g. "MRI", "knee replacement", "blood test", "office visit", "X-ray", "CT scan")
+- ndc_code: NDC code if explicitly mentioned (e.g. "50090-3568-00")
+- medication_name: Name of any drug or medication (e.g. "Humira", "metformin", "Eliquis")
+- service_date: Date of service (convert to YYYY-MM-DD; use today if "today")
 - provider_npi: Provider NPI number
-- service_type: Determine if this is "medical", "pharmacy", or "general" query
+- service_type: MUST be set based on context:
+  - "pharmacy" if the user asks about a medication, drug, prescription, or NDC code
+  - "medical" if the user asks about a procedure, test, scan, surgery, visit, or CPT code
+  - "general" if the user just asks about overall eligibility without a specific service
 
-Return a JSON object with only the fields you found. Use null for fields not found.
-Be intelligent about extraction:
-- Accept DOB in various formats (MM/DD/YYYY, DD-MM-YYYY, etc.) and convert to YYYY-MM-DD
-- Recognize procedure names and match to common codes if possible
-- Identify medication names and match to NDC codes if you can
-- If someone says "today" or "tomorrow" for service date, calculate the actual date
+## Important rules:
+- ALWAYS extract procedure_name or medication_name when the user mentions any procedure or drug, even without a code. The system will resolve the code automatically.
+- Accept DOB in any format (MM/DD/YYYY, March 15, 1985, etc.) and convert to YYYY-MM-DD.
+- If someone says "today" or "tomorrow" for service date, calculate the actual date.
+- Do NOT guess codes — only extract procedure_code/ndc_code if the user explicitly provides them.
 
-Example:
+## Examples:
 User: "I need to check if patient MB123456, born March 15, 1985 is covered for an MRI"
 Output: {{"member_id": "MB123456", "date_of_birth": "1985-03-15", "procedure_name": "MRI", "service_type": "medical"}}
+
+User: "Is Humira covered for member MB789012?"
+Output: {{"member_id": "MB789012", "medication_name": "Humira", "service_type": "pharmacy"}}
+
+User: "Check eligibility for patient MB123456"
+Output: {{"member_id": "MB123456", "service_type": "general"}}
 """
 
 

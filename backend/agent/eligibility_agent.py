@@ -45,20 +45,22 @@ class EligibilityAgent:
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph state machine"""
         workflow = StateGraph(ConversationState)
-        
+
         # Define nodes
         workflow.add_node("extract_information", self._extract_information_node)
+        workflow.add_node("resolve_codes", self._resolve_codes_node)
         workflow.add_node("determine_next_action", self._determine_next_action_node)
         workflow.add_node("gather_more_info", self._gather_more_info_node)
         workflow.add_node("call_api", self._call_api_node)
         workflow.add_node("validate_response", self._validate_response_node)
         workflow.add_node("generate_final_response", self._generate_final_response_node)
-        
+
         # Set entry point
         workflow.set_entry_point("extract_information")
-        
-        # Define edges
-        workflow.add_edge("extract_information", "determine_next_action")
+
+        # Define edges — resolve codes after extraction, before deciding next action
+        workflow.add_edge("extract_information", "resolve_codes")
+        workflow.add_edge("resolve_codes", "determine_next_action")
         
         # Conditional routing from determine_next_action
         workflow.add_conditional_edges(
@@ -70,10 +72,10 @@ class EligibilityAgent:
                 "complete": "generate_final_response"
             }
         )
-        
+
         workflow.add_edge("gather_more_info", END)
         workflow.add_edge("call_api", "validate_response")
-        
+
         # Conditional routing from validate_response
         workflow.add_conditional_edges(
             "validate_response",
@@ -83,9 +85,9 @@ class EligibilityAgent:
                 "complete": "generate_final_response"
             }
         )
-        
+
         workflow.add_edge("generate_final_response", END)
-        
+
         return workflow.compile()
     
     def process_message(self, conversation_id: str, user_message: str, 
@@ -163,6 +165,38 @@ class EligibilityAgent:
         
         return state
     
+    def _resolve_codes_node(self, state: ConversationState) -> ConversationState:
+        """
+        Deterministic step: resolve procedure/medication names to API codes.
+        Uses the mock API's own data so lookups are always consistent.
+        """
+        # Resolve procedure name → CPT code
+        if state.get("procedure_name") and not state.get("procedure_code"):
+            result = self.eligibility_api.resolve_procedure_code(state["procedure_name"])
+            if result:
+                state["procedure_code"] = result["code"]
+                state["procedure_name"] = result["name"]  # normalise to canonical name
+                if not state.get("service_type"):
+                    state["service_type"] = "medical"
+
+        # Resolve medication name → NDC code
+        if state.get("medication_name") and not state.get("ndc_code"):
+            result = self.eligibility_api.resolve_ndc_code(state["medication_name"])
+            if result:
+                state["ndc_code"] = result["code"]
+                state["medication_name"] = result["name"]  # normalise
+                if not state.get("service_type"):
+                    state["service_type"] = "pharmacy"
+
+        # Infer service_type from what we have, if still not set
+        if not state.get("service_type"):
+            if state.get("procedure_code") or state.get("procedure_name"):
+                state["service_type"] = "medical"
+            elif state.get("ndc_code") or state.get("medication_name"):
+                state["service_type"] = "pharmacy"
+
+        return state
+
     def _determine_next_action_node(self, state: ConversationState) -> ConversationState:
         """Determine what action to take next"""
         missing_fields = get_required_fields(state)
@@ -224,21 +258,38 @@ Your response:"""
         return state
     
     def _call_api_node(self, state: ConversationState) -> ConversationState:
-        """Call the eligibility API"""
+        """Call the eligibility API with a properly constructed payload."""
+        # Last-chance code resolution (in case resolve_codes_node didn't run on a resumed state)
+        if state.get("procedure_name") and not state.get("procedure_code"):
+            result = self.eligibility_api.resolve_procedure_code(state["procedure_name"])
+            if result:
+                state["procedure_code"] = result["code"]
+        if state.get("medication_name") and not state.get("ndc_code"):
+            result = self.eligibility_api.resolve_ndc_code(state["medication_name"])
+            if result:
+                state["ndc_code"] = result["code"]
+
+        # Determine effective service type for the API
+        service_type = state.get("service_type", "general")
+        if state.get("ndc_code"):
+            service_type = "pharmacy"
+        elif state.get("procedure_code"):
+            service_type = "medical"
+
         # Build API request
         api_request = {
             "member_id": state.get("member_id"),
             "date_of_birth": state.get("date_of_birth"),
-            "service_type": state.get("service_type", "general"),
+            "service_type": service_type,
             "service_date": state.get("service_date", datetime.now().strftime("%Y-%m-%d"))
         }
-        
+
         # Add service-specific fields
         if state.get("procedure_code"):
             api_request["procedure_code"] = state["procedure_code"]
         if state.get("ndc_code"):
             api_request["ndc_code"] = state["ndc_code"]
-        
+
         # Call the mock API
         try:
             api_response = self.eligibility_api.check_eligibility(api_request)
@@ -250,7 +301,7 @@ Your response:"""
                 "message": f"API call failed: {str(e)}"
             }
             state["api_called"] = True
-        
+
         return state
     
     def _validate_response_node(self, state: ConversationState) -> ConversationState:

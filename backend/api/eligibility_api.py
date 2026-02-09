@@ -299,6 +299,49 @@ class MockEligibilityAPI:
             "timestamp": datetime.now().isoformat()
         }
     
+    def resolve_procedure_code(self, name: str) -> Optional[Dict[str, str]]:
+        """
+        Resolve a procedure name to a CPT code using fuzzy matching.
+        Returns {"code": "70553", "name": "MRI Brain"} or None.
+        """
+        name_lower = name.lower().strip()
+        for code, info in self.procedure_coverage.items():
+            procedure_name_lower = info["name"].lower()
+            # Exact or substring match in either direction
+            if (name_lower in procedure_name_lower
+                or procedure_name_lower in name_lower
+                or any(word in procedure_name_lower for word in name_lower.split() if len(word) >= 2)):
+                return {"code": code, "name": info["name"]}
+        return None
+
+    def resolve_ndc_code(self, name: str) -> Optional[Dict[str, str]]:
+        """
+        Resolve a medication name to an NDC code using fuzzy matching.
+        Returns {"code": "50090-3568-00", "name": "Humira 40mg/0.8ml"} or None.
+        """
+        name_lower = name.lower().strip()
+        for code, info in self.drug_coverage.items():
+            drug_name_lower = info["name"].lower()
+            if (name_lower in drug_name_lower
+                or drug_name_lower in name_lower
+                or any(word in drug_name_lower for word in name_lower.split() if len(word) >= 2)):
+                return {"code": code, "name": info["name"]}
+        return None
+
+    def get_available_procedures(self) -> list:
+        """Get list of all known procedures with codes"""
+        return [
+            {"code": code, "name": info["name"], "covered": info["covered"], "requires_auth": info.get("requires_auth", False)}
+            for code, info in self.procedure_coverage.items()
+        ]
+
+    def get_available_medications(self) -> list:
+        """Get list of all known medications with NDC codes"""
+        return [
+            {"ndc_code": code, "name": info["name"], "covered": info["covered"], "tier": info.get("tier")}
+            for code, info in self.drug_coverage.items()
+        ]
+
     def get_available_members(self) -> list:
         """Helper method to get list of available test member IDs"""
         return [
