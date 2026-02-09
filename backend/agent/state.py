@@ -77,21 +77,36 @@ def create_initial_state(conversation_id: str, user_query: str) -> ConversationS
 
 def get_required_fields(state: ConversationState) -> List[str]:
     """
-    Determine which required fields are missing
+    Determine which required fields are missing based on user intent.
+
+    Logic:
+    - Always need member_id + date_of_birth
+    - If service_type is "pharmacy": need medication identified (ndc_code or medication_name)
+    - If service_type is "medical": need procedure identified (procedure_code or procedure_name)
+    - If service_type is not yet determined but user asked about something specific,
+      we need them to clarify what service they're asking about
     """
     required = ["member_id", "date_of_birth"]
-    
-    # Add service-specific required fields
-    if state.get("service_type") == "pharmacy":
-        required.append("ndc_code")
-    elif state.get("service_type") == "medical" and state.get("procedure_name"):
-        required.append("procedure_code")
-    
+
+    service_type = state.get("service_type")
+
+    if service_type == "pharmacy":
+        # For pharmacy: need either ndc_code (resolved) or medication_name (to resolve)
+        if not state.get("ndc_code") and not state.get("medication_name"):
+            required.append("medication_name")
+    elif service_type == "medical":
+        # For medical: need either procedure_code (resolved) or procedure_name (to resolve)
+        if not state.get("procedure_code") and not state.get("procedure_name"):
+            required.append("procedure_name")
+
+    # If no service_type set, only member_id + DOB are required.
+    # The system will do a general eligibility check which is still useful.
+
     missing = []
     for field in required:
         if not state.get(field):
             missing.append(field)
-    
+
     return missing
 
 
@@ -102,7 +117,9 @@ def get_field_display_name(field: str) -> str:
         "date_of_birth": "Date of Birth",
         "policy_number": "Insurance Policy Number",
         "procedure_code": "Procedure Code (CPT code)",
+        "procedure_name": "the name of the procedure or service",
         "ndc_code": "NDC Code (medication code)",
+        "medication_name": "the name of the medication",
         "service_date": "Service Date",
         "provider_npi": "Provider NPI Number"
     }
